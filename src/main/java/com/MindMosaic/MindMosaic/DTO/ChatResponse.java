@@ -11,5 +11,6 @@ public class ChatResponse {
     private String botReply;
     private String sentiment;
     private List<String> recommendations;
+    private float sentimentScore;
 }
 

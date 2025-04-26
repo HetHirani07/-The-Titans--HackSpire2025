@@ -23,30 +23,60 @@ public class ChatController {
     private final RecommendationService recommendationService;
     private final ChatMessageRepository chatMessageRepository;
 
-    @PostMapping("/send")
-    public ChatResponse sendChat(@RequestBody ChatRequest chatRequest) throws Exception {
-        String userInput = chatRequest.getMessage();
-        String sentiment = sentimentAnalysisService.analyzeSentiment(userInput);
-        String botReply = geminiService.generateReply(userInput);
-        List<String> recommendations = recommendationService.generateRecommendations(sentiment);
+  @PostMapping("/send")
+public ChatResponse sendChat(@RequestBody ChatRequest chatRequest) throws Exception {
+    String userInput = chatRequest.getMessage();
+    String sentiment = sentimentAnalysisService.analyzeSentiment(userInput);
+    float sentimentScore = (float) sentimentAnalysisService.analyzeSentimentScore(userInput); // Cast to float
 
-        // Save chat
-        ChatMessage chatMessage = ChatMessage.builder()
-                .userId("userId") // hardcoded for now
-                .userMessage(userInput)
-                .botReply(botReply)
-                .sentiment(sentiment)
-                .mentalHealthConcern("negative".equalsIgnoreCase(sentiment))
-                .recommendations(recommendations)
-                .timestamp(LocalDateTime.now())
-                .build();
-        chatMessageRepository.save(chatMessage);
+    String botReply = geminiService.generateReply(userInput);
+    List<String> recommendations = recommendationService.generateRecommendations(sentiment);
 
-        return ChatResponse.builder()
-                .botReply(botReply)
-                .sentiment(sentiment)
-                .recommendations(recommendations)
-                .build();
-    }
+    ChatMessage chatMessage = ChatMessage.builder()
+            .userId("userId")
+            .userMessage(userInput)
+            .botReply(botReply)
+            .sentiment(sentiment)
+            .sentimentScore(sentimentScore)
+            .mentalHealthConcern("negative".equalsIgnoreCase(sentiment))
+            .recommendations(recommendations)
+            .timestamp(LocalDateTime.now())
+            .build();
+    chatMessageRepository.save(chatMessage);
+
+    return ChatResponse.builder()
+            .botReply(botReply)
+            .sentiment(sentiment)
+            .sentimentScore(sentimentScore)
+            .recommendations(recommendations)
+            .build();
+}
+
+    @GetMapping("/history/{userId}")
+public List<ChatMessage> getChatHistory(@PathVariable String userId) {
+    return chatMessageRepository.findByUserIdOrderByTimestampAsc(userId);
+}
+
+  @GetMapping("/sentiment-summary/{userId}")
+public Map<String, Object> getSentimentSummary(@PathVariable String userId) {
+    List<ChatMessage> chats = chatMessageRepository.findByUserId(userId);
+    double avgScore = chats.stream().mapToDouble(ChatMessage::getSentimentScore).average().orElse(0.0);
+    long positive = chats.stream().filter(c -> c.getSentiment().equals("positive")).count();
+    long negative = chats.stream().filter(c -> c.getSentiment().equals("negative")).count();
+    return Map.of(
+        "averageScore", avgScore,
+        "positiveCount", positive,
+        "negativeCount", negative
+    );
+} 
+
+    @GetMapping("/recommendations/{userId}")
+public List<String> getUserRecommendations(@PathVariable String userId) {
+    List<ChatMessage> chats = chatMessageRepository.findByUserId(userId);
+    return chats.stream()
+        .flatMap(c -> c.getRecommendations().stream())
+        .distinct()
+        .toList();
+}
 }
 

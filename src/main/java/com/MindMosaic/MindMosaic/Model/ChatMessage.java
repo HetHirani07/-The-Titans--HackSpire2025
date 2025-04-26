@@ -20,6 +20,7 @@ public class ChatMessage {
     private String botReply;
     private String sentiment;
     private boolean mentalHealthConcern;
+    private float sentimentScore;
 
     @ElementCollection
     private List<String> recommendations;
