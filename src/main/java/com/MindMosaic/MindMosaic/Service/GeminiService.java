@@ -1,61 +1,73 @@
 package com.MindMosaic.MindMosaic.Service;
+
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.MindMosaic.MindMosaic.Exception.AIServiceException;
 import lombok.extern.slf4j.Slf4j;
-import okhttp3.*;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
-import java.util.List;
-import java.awt.*;
-import java.util.HashMap;
-import java.util.Map;
+import org.springframework.web.client.RestTemplate;
 
 @Service
 @Slf4j
 public class GeminiService {
+    private static final String API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+
     @Value("${gemini.api-key}")
     private String apiKey;
 
-    private final OkHttpClient client = new OkHttpClient();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final RestTemplate restTemplate;
+    private final ObjectMapper objectMapper;
 
-    public String generateReply(String userInput) throws Exception {
-        Map<String, Object> requestBody = new HashMap<>();
-        Map<String, Object> content = new HashMap<>();
-        Map<String, String> part = new HashMap<>();
+    public GeminiService(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
+        this.objectMapper = new ObjectMapper();
+    }
 
-        part.put("text", "You are a mental health chatbot. " +
-                "Respond with empathy and provide supportive advice to: " + userInput);
-        content.put("parts", List.of(part));
-        requestBody.put("contents", List.of(content));
+    public String generateReply(String userInput) {
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.set("x-goog-api-key", apiKey);
 
-        RequestBody body = RequestBody.create(
-                objectMapper.writeValueAsString(requestBody),
-                MediaType.parse("application/json")
-        );
+            ObjectNode requestBody = objectMapper.createObjectNode();
+            ObjectNode contents = objectMapper.createObjectNode();
+            contents.put("role", "user");
+            contents.put("text", userInput);
+            requestBody.putArray("contents").add(contents);
 
-        Request request = new Request.Builder()
-                .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent")
-                .header("x-goog-api-key", apiKey)
-                .post(body)
-                .build();
+            ObjectNode generationConfig = objectMapper.createObjectNode();
+            generationConfig.put("temperature", 0.7);
+            generationConfig.put("maxOutputTokens", 500);
+            requestBody.set("generationConfig", generationConfig);
 
-        try (Response response = client.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                throw new RuntimeException("Gemini API error: " + response.code());
-            }
+            HttpEntity<String> request = new HttpEntity<>(requestBody.toString(), headers);
+            String response = restTemplate.postForObject(API_URL, request, String.class);
 
-            String responseBody = response.body().string();
-            Map<String, Object> result = objectMapper.readValue(responseBody, Map.class);
+            JsonNode responseJson = objectMapper.readTree(response);
+            return extractTextFromResponse(responseJson);
 
-            List<Map<String, Object>> candidates = (List<Map<String, Object>>) result.get("candidates");
-            Map<String, Object> content1 = (Map<String, Object>) candidates.get(0).get("content");
-            List<Map<String, Object>> parts = (List<Map<String, Object>>) content1.get("parts");
-
-            return (String) parts.get(0).get("text");
         } catch (Exception e) {
-            log.error("Error generating reply: ", e);
-            throw new RuntimeException("Failed to generate reply");
+            log.error("Failed to generate response", e);
+            throw new AIServiceException("Failed to generate response", e);
+        }
+    }
+
+    private String extractTextFromResponse(JsonNode response) {
+        try {
+            return response.path("candidates")
+                    .get(0)
+                    .path("content")
+                    .path("parts")
+                    .get(0)
+                    .path("text")
+                    .asText();
+        } catch (Exception e) {
+            throw new AIServiceException("Failed to parse response", e);
         }
     }
 }
-

@@ -1,82 +1,70 @@
 package com.MindMosaic.MindMosaic.Controller;
 
-import com.MindMosaic.MindMosaic.DTO.ChatRequest;
 import com.MindMosaic.MindMosaic.DTO.ChatResponse;
 import com.MindMosaic.MindMosaic.Model.ChatMessage;
-import com.MindMosaic.MindMosaic.Repository.ChatMessageRepository;
-import com.MindMosaic.MindMosaic.Service.GeminiService;
-import com.MindMosaic.MindMosaic.Service.RecommendationService;
-import com.MindMosaic.MindMosaic.Service.SentimentAnalysisService;
+import com.MindMosaic.MindMosaic.Service.ChatService;
+import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
-
-import java.time.LocalDateTime;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/chat")
 @RequiredArgsConstructor
+@Slf4j
 public class ChatController {
+    private final ChatService chatService;
 
-    private final SentimentAnalysisService sentimentAnalysisService;
-    private final GeminiService geminiService;
-    private final RecommendationService recommendationService;
-    private final ChatMessageRepository chatMessageRepository;
+    @PostMapping("/send")
+    public ResponseEntity<ChatResponse> sendMessage(
+            @RequestBody MessageRequest messageRequest,
+            @AuthenticationPrincipal UserDetails userDetails) {
 
-  @PostMapping("/send")
-public ChatResponse sendChat(@RequestBody ChatRequest chatRequest) throws Exception {
-    String userInput = chatRequest.getMessage();
-    String sentiment = sentimentAnalysisService.analyzeSentiment(userInput);
-    float sentimentScore = (float) sentimentAnalysisService.analyzeSentimentScore(userInput); // Cast to float
+        if (userDetails == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
 
-    String botReply = geminiService.generateReply(userInput);
-    List<String> recommendations = recommendationService.generateRecommendations(sentiment);
+        try {
+            ChatResponse response = chatService.processChat(
+                    messageRequest.getMessage(),
+                    userDetails.getUsername()
+            );
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Error processing chat: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
 
-    ChatMessage chatMessage = ChatMessage.builder()
-            .userId("userId")
-            .userMessage(userInput)
-            .botReply(botReply)
-            .sentiment(sentiment)
-            .sentimentScore(sentimentScore)
-            .mentalHealthConcern("negative".equalsIgnoreCase(sentiment))
-            .recommendations(recommendations)
-            .timestamp(LocalDateTime.now())
-            .build();
-    chatMessageRepository.save(chatMessage);
+    @GetMapping("/recommendations")
+    public ResponseEntity<List<String>> getRecommendations(
+            @AuthenticationPrincipal UserDetails userDetails) {
 
-    return ChatResponse.builder()
-            .botReply(botReply)
-            .sentiment(sentiment)
-            .sentimentScore(sentimentScore)
-            .recommendations(recommendations)
-            .build();
+        if (userDetails == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        try {
+            List<ChatMessage> userChats = chatService.getChatHistory(userDetails.getUsername());
+            List<String> recommendations = userChats.stream()
+                    .flatMap(chat -> chat.getRecommendations().stream())
+                    .distinct()
+                    .collect(Collectors.toList());
+            return ResponseEntity.ok(recommendations);
+        } catch (Exception e) {
+            log.error("Error fetching recommendations: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
 }
 
-    @GetMapping("/history/{userId}")
-public List<ChatMessage> getChatHistory(@PathVariable String userId) {
-    return chatMessageRepository.findByUserIdOrderByTimestampAsc(userId);
+@Data
+class MessageRequest {
+    private String message;
 }
-
-  @GetMapping("/sentiment-summary/{userId}")
-public Map<String, Object> getSentimentSummary(@PathVariable String userId) {
-    List<ChatMessage> chats = chatMessageRepository.findByUserId(userId);
-    double avgScore = chats.stream().mapToDouble(ChatMessage::getSentimentScore).average().orElse(0.0);
-    long positive = chats.stream().filter(c -> c.getSentiment().equals("positive")).count();
-    long negative = chats.stream().filter(c -> c.getSentiment().equals("negative")).count();
-    return Map.of(
-        "averageScore", avgScore,
-        "positiveCount", positive,
-        "negativeCount", negative
-    );
-} 
-
-    @GetMapping("/recommendations/{userId}")
-public List<String> getUserRecommendations(@PathVariable String userId) {
-    List<ChatMessage> chats = chatMessageRepository.findByUserId(userId);
-    return chats.stream()
-        .flatMap(c -> c.getRecommendations().stream())
-        .distinct()
-        .toList();
-}
-}
-
